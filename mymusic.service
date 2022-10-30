@@ -1,0 +1,16 @@
+[Unit]
+Description=Docker Compose MyMusic Service
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/srv/mymusic-project
+ExecStart=docker compose up -d
+ExecStart=setfacl -m user:1997:rw /var/run/docker.sock
+ExecStop=docker compose down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

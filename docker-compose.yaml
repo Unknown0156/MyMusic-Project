@@ -1,0 +1,170 @@
+version: '3.8'
+services:
+  postgres:
+    container_name: ${PGNAME}
+    build:
+      context: ./pgsql
+      dockerfile: Dockerfile
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=50"
+      - "-c"
+      - "shared_buffers=48MB"
+      - "-c"
+      - "effective_cache_size=1GB"
+      - "-c"
+      - "work_mem=8MB"
+      - "-c"
+      - "maintenance_work_mem=128MB"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "temp_file_limit=1GB"
+      - "-c"
+      - "idle_in_transaction_session_timeout=20s"
+    environment:
+      POSTGRES_DB: ${PGDB}
+      POSTGRES_USER: ${PGUSER}
+      POSTGRES_PASSWORD: ${PGPASS}
+      PGDATA: "/var/lib/postgresql/data/pgdata"
+      LANG: ru_RU.UTF-8
+      LANGUAGE: ru_RU.UTF-8
+    volumes:
+      - ./pgsql:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER} -d ${PGDB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - mymusic
+
+#  pgadmin:
+#    container_name: pgadmin
+#    image: dpage/pgadmin4:6
+#    environment:
+#      PGADMIN_DEFAULT_EMAIL: ${PGADMINEMAIL}
+#      PGADMIN_DEFAULT_PASSWORD: ${PGADMINPASS}
+#      PGADMIN_CONFIG_SERVER_MODE: "False"
+#    depends_on:
+#      - postgres
+#    restart: unless-stopped
+#    networks:
+#      - mymusic
+
+  mymusic:
+    container_name: mymusic
+    build:
+      context: ./mymusic
+      dockerfile: Dockerfile
+    environment:
+      PGHOST: ${PGNAME}
+      PGDB: ${PGDB}
+      PGUSER: ${PGUSER}
+      PGPASS: ${PGPASS}
+    volumes:
+      - ./mymusic:/usr/local/apache2/htdocs/mymusic
+      - ./mymusic/httpd.conf:/usr/local/apache2/conf/httpd.conf
+      - ./mymusic/mymusic.conf:/usr/local/apache2/conf/extra/mymusic.conf
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    networks:
+      - mymusic
+
+#  mymusic2:
+#    container_name: mymusic2
+#    build:
+#      context: ./mymusic
+#      dockerfile: Dockerfile
+#    environment:
+#      PGHOST: ${PGNAME}
+#      PGDB: ${PGDB}
+#      PGUSER: ${PGUSER}
+#      PGPASS: ${PGPASS}
+#    volumes:
+#      - ./mymusic:/usr/local/apache2/htdocs/mymusic
+#      - ./mymusic/httpd.conf:/usr/local/apache2/conf/httpd.conf
+#      - ./mymusic/mymusic.conf:/usr/local/apache2/conf/extra/mymusic.conf
+#    depends_on:
+#      - postgres
+#    restart: unless-stopped
+#    networks:
+#      - mymusic
+
+  proxy:
+    container_name: proxy
+    image: nginx:1.23
+    volumes:
+      - ./proxy/nginx.conf:/etc/nginx/nginx.conf
+      - ./proxy/proxy.conf:/etc/nginx/conf.d/default.conf
+      - /etc/letsencrypt/live/v1468519.hosted-by-vdsina.ru/cert.pem:/etc/nginx/cert.pem
+      - /etc/letsencrypt/live/v1468519.hosted-by-vdsina.ru/privkey.pem:/etc/nginx/privkey.pem
+    ports:
+      - 80:80
+      - 443:443
+    depends_on:
+      - mymusic
+#      - mymusic2
+    networks:
+      - mymusic
+
+  zabbix-server:
+    container_name: zabbix-server
+    image: zabbix/zabbix-server-pgsql
+    environment:
+      - DB_SERVER_HOST=${PGNAME}
+      - POSTGRES_DB=${ZABBIXDB}
+      - POSTGRES_USER=${ZABBIXUSER}
+      - POSTGRES_PASSWORD=${ZABBIXPASS}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:10051:10051"
+    depends_on:
+      - postgres
+    networks:
+      - mymusic
+
+  zabbix-web:
+    container_name: zabbix-web
+    image: zabbix/zabbix-web-apache-pgsql
+    environment:
+      - DB_SERVER_HOST=${PGNAME}
+      - POSTGRES_DB=${ZABBIXDB}
+      - POSTGRES_USER=${ZABBIXUSER}
+      - POSTGRES_PASSWORD=${ZABBIXPASS}
+      - ZBX_SERVER_HOST=zabbix-server
+      - TZ=Europe/Moscow
+    volumes:
+      - ./zabbix-web/apache.conf:/etc/zabbix/apache.conf
+    depends_on:
+      - postgres
+      - zabbix-server
+    networks:
+      - mymusic
+
+  zabbix-agent:
+    container_name: zabbix-agent
+    image: zabbix/zabbix-agent2
+    hostname: zabbix-agent
+    privileged: true
+    pid: "host"
+    environment:
+      - ZBX_PASSIVESERVERS=172.16.0.0/12
+      - ZBX_HOSTNAME=VPS
+      - ZBX_DEBUGLEVEL=5
+    volumes:
+      - ./zabbix-agent:/etc/zabbix/zabbix_agentd.d
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - mymusic
+
+networks:
+  mymusic:
+    driver: bridge
